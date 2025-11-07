@@ -1,5 +1,5 @@
 diff --git a/packages/opencode/src/cli/cmd/tui/app.tsx b/packages/opencode/src/cli/cmd/tui/app.tsx
-index 1fba51cb..a501885d 100644
+index 9d30ed6d..085ce745 100644
 --- a/packages/opencode/src/cli/cmd/tui/app.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/app.tsx
 @@ -17,7 +17,7 @@ import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command
@@ -7,61 +7,72 @@ index 1fba51cb..a501885d 100644
  import { DialogSessionList } from "@tui/component/dialog-session-list"
  import { KeybindProvider } from "@tui/context/keybind"
 -import { ThemeProvider, useTheme } from "@tui/context/theme"
-+import { ThemeProvider, useTheme, initializeThemes } from "@tui/context/theme"
++import { ThemeProvider, useTheme, loadCustomThemes } from "@tui/context/theme"
  import { Home } from "@tui/routes/home"
  import { Session } from "@tui/routes/session"
  import { PromptHistoryProvider } from "./component/prompt/history"
-@@ -99,6 +99,7 @@ export function tui(input: {
+@@ -98,6 +98,7 @@ export function tui(input: {
  }) {
    // promise to prevent immediate exit
    return new Promise<void>(async (resolve) => {
-+    await initializeThemes()
++    const customThemes = await loadCustomThemes()
      const mode = await getTerminalBackgroundColor()
-
+ 
      const routeData: Route | undefined = input.sessionID
+@@ -126,7 +127,7 @@ export function tui(input: {
+                   <RouteProvider data={routeData}>
+                     <SDKProvider url={input.url}>
+                       <SyncProvider>
+-                        <ThemeProvider mode={mode}>
++                        <ThemeProvider mode={mode} customThemes={customThemes}>
+                           <LocalProvider
+                             initialModel={input.model}
+                             initialAgent={input.agent}
 diff --git a/packages/opencode/src/cli/cmd/tui/context/theme.tsx b/packages/opencode/src/cli/cmd/tui/context/theme.tsx
-index 93eae6c2..793a0593 100644
+index a609bcc9..098b339e 100644
 --- a/packages/opencode/src/cli/cmd/tui/context/theme.tsx
 +++ b/packages/opencode/src/cli/cmd/tui/context/theme.tsx
-@@ -26,6 +26,9 @@ import tokyonight from "./theme/tokyonight.json" with { type: "json" }
- import vesper from "./theme/vesper.json" with { type: "json" }
- import zenburn from "./theme/zenburn.json" with { type: "json" }
+@@ -28,6 +28,8 @@ import zenburn from "./theme/zenburn.json" with { type: "json" }
  import { useKV } from "./kv"
+ import { useRenderer } from "@opentui/solid"
+ import { createStore } from "solid-js/store"
 +import path from "path"
 +import { Global } from "@/global"
-+import { Instance } from "@/project/instance"
-
+ 
  type Theme = {
    primary: RGBA
-@@ -93,7 +96,7 @@ type ThemeJson = {
-   theme: Record<keyof Theme, ColorValue>
- }
-
--export const THEMES: Record<string, ThemeJson> = {
-+const BUILTIN_THEMES: Record<string, ThemeJson> = {
-   aura,
-   ayu,
-   catppuccin,
-@@ -119,6 +122,36 @@ export const THEMES: Record<string, ThemeJson> = {
+@@ -121,6 +123,41 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
    zenburn,
  }
-
-+async function loadCustomThemes(): Promise<Record<string, ThemeJson>> {
+ 
++export async function loadCustomThemes(): Promise<Record<string, ThemeJson>> {
 +  const customThemes: Record<string, ThemeJson> = {}
-+  const directories = [
-+    path.join(Global.Path.config, "themes"),
-+    path.join(Instance.worktree, ".opencode", "themes"),
-+    path.join(Instance.directory, ".opencode", "themes"),
-+  ]
++  const directories = [path.join(Global.Path.config, "themes")]
++
++  // Try to load from project directories if Instance is available
++  try {
++    const { Instance } = await import("@/project/instance")
++    directories.push(
++      path.join(Instance.worktree, ".opencode", "themes"),
++      path.join(Instance.directory, ".opencode", "themes"),
++    )
++  } catch {
++    // Instance not available, skip project directories
++  }
 +
 +  for (const dir of directories) {
 +    const glob = new Bun.Glob("*.json")
 +    try {
 +      for await (const file of glob.scan({ cwd: dir, absolute: true })) {
 +        const themeName = path.basename(file, ".json")
-+        const content = await Bun.file(file).text()
-+        const themeJson = JSON.parse(content) as ThemeJson
-+        customThemes[themeName] = themeJson
++        try {
++          const content = await Bun.file(file).text()
++          const themeJson = JSON.parse(content) as ThemeJson
++          customThemes[themeName] = themeJson
++        } catch (error) {
++          // Skip invalid theme files
++          console.error(`Failed to load theme ${file}:`, error)
++        }
 +      }
 +    } catch {}
 +  }
@@ -69,13 +80,20 @@ index 93eae6c2..793a0593 100644
 +  return customThemes
 +}
 +
-+export let THEMES: Record<string, ThemeJson> = { ...BUILTIN_THEMES }
-+
-+export async function initializeThemes() {
-+  const customThemes = await loadCustomThemes()
-+  THEMES = { ...BUILTIN_THEMES, ...customThemes }
-+}
-+
  function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
    const defs = theme.defs ?? {}
    function resolveColor(c: ColorValue): RGBA {
+@@ -137,11 +174,11 @@ function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
+ 
+ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
+   name: "Theme",
+-  init: (props: { mode: "dark" | "light" }) => {
++  init: (props: { mode: "dark" | "light"; customThemes?: Record<string, ThemeJson> }) => {
+     const sync = useSync()
+     const kv = useKV()
+     const [store, setStore] = createStore({
+-      themes: DEFAULT_THEMES,
++      themes: { ...DEFAULT_THEMES, ...(props.customThemes ?? {}) },
+       mode: props.mode,
+       active: (sync.data.config.theme ?? kv.get("theme", "opencode")) as string,
+     })
