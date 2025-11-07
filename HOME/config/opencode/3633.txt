@@ -1,5 +1,5 @@
 -- prompt to create/update patch 3633.patch
-opencode (https://github.com/sst/opencode) v1.0.x has a regression (https://github.com/sst/opencode/issues/3633) so that custom themes do not work anymore (unlike v0.15.x). Please create a fix for the regression and a corresponding patch file 3633.patch.
+opencode (https://github.com/sst/opencode) v1.0.x has a regression (https://github.com/sst/opencode/issues/3633) so that custom themes (https://opencode.ai/docs/themes/) do not work anymore (unlike v0.15.x). Please create a fix for the regression and a corresponding patch file 3633.patch.
 
 -- ~/.zshrc
 #alias o="opencode"
